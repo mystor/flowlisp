@@ -5,6 +5,21 @@
 ;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; Maybe this should be moved into a utility module
+(def valid-chars
+  (map char (concat (range 48 58) ; 0-9
+                    (range 66 91) ; A-Z
+                    (range 97 123)))) ; a-z
+
+(defn random-char
+  "Generates a random character from 0-9A-Za-z"
+  []
+  (nth valid-chars (rand (count valid-chars))))
+
+(defn random-str
+  "Generates a random string with length length"
+  [length]
+  (apply str (take length (repeatedly random-char))))
+
 (defn update-first
   "Calls cb on the first entry of the passed in seq.
   Returns a new seq with the return value as the first entry"
@@ -40,7 +55,7 @@
   (instance? NoValue x))
 
 ;; This is the parent type for a user function
-(defrecord UserFn [id source context])
+(defrecord UserFn [id args source context])
 (defn user-fn?
   [x]
   (instance? UserFn x))
@@ -48,6 +63,10 @@
 (defn constant?
   [x]
   (or (number? x) (string? x) (true? x) (false? x)))
+
+(defn instant?
+  [x]
+  (or (constant? x) (symbol? x) (keyword? x)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;
@@ -81,45 +100,47 @@
   [state arg context]
   (if (constant? arg)
     arg
-    (if (nil? context)
-      (let [value (get @keywords arg novalue)]
-        (if (novalue? value)
-          (throw (Exception. "Could not resolve arg"))
-          value))
-      (let [resolved-context (get (:objects state) context)
-            parent (:parent resolved-context)
-            value (get resolved-context arg novalue)]
-        (if (novalue? value)
-          (recur state arg parent)
-          value)))))
+    (if (keyword? arg)
+      (recur state (symbol (name arg)) nil)
+      (if (nil? context)
+        (let [value (get @keywords arg novalue)]
+          (if (novalue? value)
+            (throw (Exception. "Could not resolve arg"))
+            value))
+        (let [resolved-context (get (:objects state) context)
+              parent (:parent resolved-context)
+              value (get resolved-context arg novalue)]
+          (if (novalue? value)
+            (recur state arg parent)
+            value))))))
 
 (defn register-keyword
   [kwd value]
   (swap! keywords #(assoc % kwd value)))
 
-(defn eval-arg
-  "Middleware - evaluates the positional argument at :src-idx, and Calls
-  next when it is ready"
-  [state ctx next]
-  (let [idx (:src-idx ctx)
-        entry (stack-entry state)
+(defn eval-to
+  "Middleware - evaluates the form :src and calls next when it is ready
+  Places the resulting item at :target"
+  [state ctx source target next]
+  (let [entry (stack-entry state)
         context (:context entry)
-        source (nth (:source entry) idx)
-        dest (get (:dest entry) idx novalue)]
-
-    (if (novalue? dest)
-      (if (or (constant? source) (symbol? source))
-        (recur (update-stack-entry state  ; We can resolve it instantly!
-                                   #(assoc-in % [:dest idx]
+        value (get (:dest entry) target novalue)]
+    (if (novalue? value)
+      (if (instant? source)
+        (recur (update-stack-entry state  ; We can resolve it instantly
+                                   #(assoc-in % [:dest target]
                                               (fl-resolve state source context)))
-               ctx next)
-        (-> state  ; We have to perform a call to resolve it, add it to the stack
-            (update-stack-entry #(assoc % :target idx))
+               ctx source target next)
+        (-> state  ; We have to perform a call - add it to the stack
+            (update-stack-entry #(assoc % :target target))
             (mk-stack-entry source context)))
-      (next state  ; It has been resolved, call next
-            (-> ctx
-                (assoc :src-idx (inc idx))
-                (assoc :value dest))))))
+      (next state  ; We have resolved this already - call next
+            (assoc ctx :value value)))))
+
+(defn eval-arg
+  [state ctx next]
+  (let [idx (:src-idx ctx)]
+    (eval-to state (assoc ctx :src-idx (inc idx)) (nth (:source (stack-entry state)) idx) idx next)))
 
 (defn basic-fn
   "Generates a middleware stack which will evaluate all arguments, and then
@@ -148,10 +169,23 @@
   (basic-fn (fn [state ctx next args]
               (next state (assoc ctx :value (apply cb args))))))
 
+(defn gen-context
+  [action args]
+  (-> (zipmap (:args action) args)
+      (assoc :parent (:context action))))
+
 (defn call-user-fn
   "Call a user defined function (will be executed on the stack)"
   [state ctx]
-  (throw (Exception. "Not implemented yet")))
+  (let [action (:value ctx)
+        source (cons :do (:source action))
+        src-key (random-str 10)
+        handler (fn [state ctx next args]
+                  (-> state
+                      (update-in [:stack] rest)
+                      (update-in [:objects] #(assoc % src-key (gen-context action args)))
+                      (mk-stack-entry source src-key)))]
+    ((basic-fn handler) state ctx)))
 
 (defn do-action
   "Performs the correct action for the given action (action is (:value ctx))"
@@ -186,6 +220,18 @@
 (register-keyword '<= (pure-fn <=))
 (register-keyword '>= (pure-fn >=))
 
+(defn fn-create
+  [state ctx]
+  (let [entry (stack-entry state)
+        rest-src (rest (:source entry))
+        args (first rest-src)
+        commands (rest rest-src)
+        context (:context entry)]
+    (if (not (seq? args))
+      (throw (Exception. args))
+      (fl-return state (assoc ctx :value (UserFn. "<Anonymous-Fn>" args commands context))))))
+(register-keyword 'fn fn-create)
+
 ;; basic table operations
 ; (table a b, c d)
 ; (list a b c d)  - equivalent to (table 1 a 2 b 3 c 4 d)
@@ -213,14 +259,31 @@
                           :dest {}})
             :objects {}})
 
+(defn initial-state
+  [source]
+  {:stack (list {:source source
+                 :context :global
+                 :dest {}}
+                {:target :result
+                 :dest {}})
+   :objects {:global {'x 10}}})
+
 (defn run
   [state]
   (if (<= (count (:stack state)) 1)
     (:result (:dest (first (:stack state))))
     (recur (tick state))))
 
-(run state)
+(run (initial-state '((fn (x) (* x x)) 10)))
+(run (initial-state '(* 10 10)))
+(* 10 10)
 
+(def state (initial-state '((fn (x y z) (* x 10)) 1 1 1)))
 (tick state)
 (tick (tick state))
 (tick (tick (tick state)))
+(tick (tick (tick (tick state))))
+(tick (tick (tick (tick (tick state)))))
+(tick (tick (tick (tick (tick (tick state))))))
+
+(run state)
