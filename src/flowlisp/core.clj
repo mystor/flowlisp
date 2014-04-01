@@ -220,6 +220,22 @@
 (register-keyword '<= (pure-fn <=))
 (register-keyword '>= (pure-fn >=))
 
+(defn fl-set-init
+  [state ctx next]
+  (next state (assoc ctx :src-idx 2)))
+
+(defn fl-set
+  [state ctx next]
+  (let [entry (stack-entry state)
+        var (nth (:source entry) 1)
+        context-id (:context entry)
+        context (assoc (get (:objects state) context-id) var (:value ctx))
+        state (assoc-in state [:objects context-id] context)]
+    (next state ctx)))
+
+(register-keyword 'set!
+                  (chain fl-set-init eval-arg fl-set))
+
 (defn fn-create
   [state ctx]
   (let [entry (stack-entry state)
@@ -278,7 +294,11 @@
 (run (initial-state '(* 10 10)))
 (* 10 10)
 
-(def state (initial-state '((fn (x y z) (* x 10)) 1 1 1)))
+(def state (initial-state '(do
+                             (set! x 10)
+                             (set! y 20)
+                             (set! z (+ x y))
+                             z)))
 (tick state)
 (tick (tick state))
 (tick (tick (tick state)))
