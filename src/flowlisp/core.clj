@@ -56,13 +56,16 @@
 
 ;; This is the parent type for a user function
 (defrecord UserFn [id args source context])
+(defn user-fn
+  [id args source context]
+  (UserFn. id args source context))
 (defn user-fn?
   [x]
   (instance? UserFn x))
 
 (defn constant?
   [x]
-  (or (number? x) (string? x) (true? x) (false? x)))
+  (or (number? x) (string? x) (true? x) (false? x) (nil? x)))
 
 (defn instant?
   [x]
@@ -105,7 +108,7 @@
       (if (nil? context)
         (let [value (get @keywords arg novalue)]
           (if (novalue? value)
-            (throw (Exception. "Could not resolve arg"))
+            (throw (Exception. (str "Could not resolve " (name arg))))
             value))
         (let [resolved-context (get (:objects state) context)
               parent (:parent resolved-context)
@@ -169,6 +172,20 @@
   (basic-fn (fn [state ctx next args]
               (next state (assoc ctx :value (apply cb args))))))
 
+(defn basic-macro
+  [cb]
+  (fn [state ctx]
+    (let [entry (stack-entry state)
+          args (rest (:source entry))]
+      (cb state ctx next args))))
+
+(defn pure-macro
+  [cb]
+  (basic-macro (fn [state ctx next args]
+                 (mk-stack-entry (update-in state [:stack] rest)
+                                 (apply cb args)
+                                 (:context (stack-entry state))))))
+
 (defn gen-context
   [action args]
   (-> (zipmap (:args action) args)
@@ -178,7 +195,7 @@
   "Call a user defined function (will be executed on the stack)"
   [state ctx]
   (let [action (:value ctx)
-        source (cons :do (:source action))
+        source (cons :begin (:source action))
         src-key (random-str 10)
         handler (fn [state ctx next args]
                   (-> state
@@ -194,7 +211,7 @@
     (cond
      (fn? action) (action state ctx)
      (user-fn? action) (call-user-fn state ctx)
-     :else (throw (Exception. "Cannot call non-callable (first element in form must be callable)")))))
+     :else (throw (Exception. (str "Cannot call non-callable (first element in form must be callable)" action))))))
 
 ;; On a tick, we evaluate the action, and then perform it
 (def do-tick (chain eval-arg do-action))
@@ -236,17 +253,6 @@
 (register-keyword 'set!
                   (chain fl-set-init eval-arg fl-set))
 
-(defn fn-create
-  [state ctx]
-  (let [entry (stack-entry state)
-        rest-src (rest (:source entry))
-        args (first rest-src)
-        commands (rest rest-src)
-        context (:context entry)]
-    (if (not (seq? args))
-      (throw (Exception. args))
-      (fl-return state (assoc ctx :value (UserFn. "<Anonymous-Fn>" args commands context))))))
-(register-keyword 'fn fn-create)
 
 ;; basic table operations
 ; (table a b, c d)
@@ -254,56 +260,4 @@
 ; (union a b) - keys of both united as one!
 
 ;; if statement
-(register-keyword 'if (chain eval-arg
-                             (fn fl-if [state ctx next]
-                               (if (true? (:value ctx))
-                                 (eval-arg state (assoc ctx :src-idx 2) next)
-                                 (eval-arg state (assoc ctx :src-idx 3) next)))))
 
-(register-keyword 'do
-                  (pure-fn
-                   #(last %&)))
-
-;; Testing it!
-(def state {:stack (list {:source '(do 1 10 (+ 1 5))
-                          :target nil
-                          :context nil
-                          :dest {}}
-                         {:source '()
-                          :target :result
-                          :context nil
-                          :dest {}})
-            :objects {}})
-
-(defn initial-state
-  [source]
-  {:stack (list {:source source
-                 :context :global
-                 :dest {}}
-                {:target :result
-                 :dest {}})
-   :objects {:global {'x 10}}})
-
-(defn run
-  [state]
-  (if (<= (count (:stack state)) 1)
-    (:result (:dest (first (:stack state))))
-    (recur (tick state))))
-
-(run (initial-state '((fn (x) (* x x)) 10)))
-(run (initial-state '(* 10 10)))
-(* 10 10)
-
-(def state (initial-state '(do
-                             (set! x 10)
-                             (set! y 20)
-                             (set! z (+ x y))
-                             z)))
-(tick state)
-(tick (tick state))
-(tick (tick (tick state)))
-(tick (tick (tick (tick state))))
-(tick (tick (tick (tick (tick state)))))
-(tick (tick (tick (tick (tick (tick state))))))
-
-(run state)
