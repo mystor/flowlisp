@@ -1,5 +1,7 @@
 (ns flowlisp.core)
 
+(defrecord Exception [message])
+
 ;;;;;;;;;;;;;;;;;;;;;;;
 ;; UTILITY FUNCTIONS ;;
 ;;;;;;;;;;;;;;;;;;;;;;;
@@ -13,7 +15,7 @@
 (defn random-char
   "Generates a random character from 0-9A-Za-z"
   []
-  (nth valid-chars (rand (count valid-chars))))
+  (rand-nth valid-chars))
 
 (defn random-str
   "Generates a random string with length length"
@@ -169,8 +171,9 @@
   It does not modify state, and only depends on its arguments.
   It is called with the arguments as its arguments"
   [cb]
-  (basic-fn (fn [state ctx next args]
-              (next state (assoc ctx :value (apply cb args))))))
+  (with-meta (basic-fn (fn [state ctx next args]
+                         (next state (assoc ctx :value (apply cb args)))))
+    {:procedure true}))
 
 (defn basic-macro
   [cb]
@@ -188,7 +191,7 @@
 
 (defn gen-context
   [action args]
-  (-> (zipmap (:args action) args)
+  (-> (zipmap (:args action) (concat args (repeat nil)))
       (assoc :parent (:context action))))
 
 (defn call-user-fn
@@ -223,41 +226,4 @@
 ;; Define the keywords
 ;; These are added to the keywords atom
 ;; TODO: Move these to a seperate module? (at least the definitions)
-
-;; Basic math
-(register-keyword '+ (pure-fn +))
-(register-keyword '- (pure-fn -))
-(register-keyword '* (pure-fn *))
-(register-keyword '/ (pure-fn /))
-
-;; Comparisons
-(register-keyword '> (pure-fn >))
-(register-keyword '< (pure-fn <))
-(register-keyword '= (pure-fn =))
-(register-keyword '<= (pure-fn <=))
-(register-keyword '>= (pure-fn >=))
-
-(defn fl-set-init
-  [state ctx next]
-  (next state (assoc ctx :src-idx 2)))
-
-(defn fl-set
-  [state ctx next]
-  (let [entry (stack-entry state)
-        var (nth (:source entry) 1)
-        context-id (:context entry)
-        context (assoc (get (:objects state) context-id) var (:value ctx))
-        state (assoc-in state [:objects context-id] context)]
-    (next state ctx)))
-
-(register-keyword 'set!
-                  (chain fl-set-init eval-arg fl-set))
-
-
-;; basic table operations
-; (table a b, c d)
-; (list a b c d)  - equivalent to (table 1 a 2 b 3 c 4 d)
-; (union a b) - keys of both united as one!
-
-;; if statement
 

@@ -1,6 +1,5 @@
 (ns flowlisp.lang
-  [:require [flowlisp.core :refer :all]
-            [flowlisp.special :refer :all]])
+  [:require [flowlisp.core :refer [tick]]])
 
 ;; Basic testing functions ;;
 (defn initial-state
@@ -26,8 +25,7 @@
 (fleval
  '(begin
    (define x 10)
-   (+ x 1)
-   (quote (+ 1 1 1))))
+   (+ x 1)))
 
 (fleval
  '(let ((x 10)
@@ -39,5 +37,10 @@
    (define function (lambda (x)
                             (set! x 10)))
    (define x 20)
-   (function nil)
+   (function)
    x))
+
+(fleval
+ '(or false false))
+
+(fleval '(sqrt 4))

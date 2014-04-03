@@ -4,7 +4,7 @@
 (defn string->number
   "Parses"
   [s]
-  (Double. s))
+  (js/parseFloat s))
 
 (def atom-end #{\( \) \" \' \space \tab \newline})
 (def whitespace #{\space \tab \newline})
