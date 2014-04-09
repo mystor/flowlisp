@@ -8,16 +8,16 @@
 
 (def atom-end #{\( \) \" \' \space \tab \newline})
 (def whitespace #{\space \tab \newline})
-(def digits #{\- \0 \1 \2 \3 \4 \5 \6 \7 \8 \9})
+(def digits #{\0 \1 \2 \3 \4 \5 \6 \7 \8 \9})
 
 (defn parse-symbol
   [s]
   (if (symbol? s)
-    (if (contains? digits (first (name s)))
-      (string->number (name s))
-      (if (= \# (first (name s)))
-        (= \t (second (name s)))
-        s))
+    (cond
+     (contains? digits (first (name s))) (string->number (name s))
+     (and (= \- (first (name s))) (contains? digits (second (name s)))) (string->number (name s))
+     (= \# (first (name s))) (= \t (second (name s)))
+     :else s)
     s))
 
 (defn pop-in
@@ -60,7 +60,7 @@
 
 (defn lex-parse
   [source]
-  (deep-into-seq (cons :do (parse-sexpr source 1 [[]]))))
+  (deep-into-seq (cons :begin (parse-sexpr source 1 [[]]))))
 
 
 

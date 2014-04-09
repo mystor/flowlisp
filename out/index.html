@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Flowlisp</title>
+    <style>
+      #code {
+        position: absolute;
+        top: 0;
+        width: 50%;
+        /* right: 0;*/
+        bottom: 0px;
+        left: 0;
+      }
+      #graph {
+        position: absolute;
+        top: 0;
+        width: 50%;
+        right: 0;
+        bottom: 0px;
+        overflow: scroll;
+      }
+    </style>
+  </head>
+  <body>
+    <div>
+      <div id="code"></div>
+      <section id="graph">
+        <svg>
+          <rect width="10" height="16" style="fill:red">
+        </svg>
+      </div>
+    </div>
+    <script src="//cdnjs.cloudflare.com/ajax/libs/ace/1.1.3/ace.js"></script>
+    <script src="target/goog/base.js"></script>
+    <script src="flowlisp.js"></script>
+  </body>
+</html>
+
