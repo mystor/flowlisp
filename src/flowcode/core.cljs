@@ -16,17 +16,21 @@
                             :position "absolute"
                             :width "5px"
                             :height "16px"
-                            :top (str (* linum 16) "px")
+                            :top (str (* (- linum 1) 16) "px")
                             :left (str (* i 5) "px")}}]))]])
-
-(defn plot-history! []
-  nil)
-
 
 (def editor (.edit js/ace "code"))
 
 (def tick-timeout (atom nil))
 (def history (atom (list)))
+
+
+(defn get-linum [state]
+  (:linum (meta (:source (first (:stack state))))))
+
+(defn plot-history! []
+  (replace! "#graph" (plot-history (filter #(not (nil? %)) (map get-linum (reverse @history))))))
+
 
 (defn do-tick []
   (try
