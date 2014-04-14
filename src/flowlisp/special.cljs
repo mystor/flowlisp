@@ -85,3 +85,5 @@
       (throw (IncompleteException. state)))))
 
 (definefunction 'identity identity)
+
+(definefunction 'list list)

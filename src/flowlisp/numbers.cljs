@@ -43,7 +43,6 @@
                           a
                           (recur b (rem a b)))))
 
-
 ;; Comparisons
 (definenumerical '> >)
 (definenumerical '< <)

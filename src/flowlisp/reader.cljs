@@ -20,13 +20,18 @@
      :else s)
     s))
 
+(defn with-endlinum [form linum]
+  (if (vector? form)
+    (with-meta form (assoc (meta form) :endlinum linum))
+    form))
+
 (defn pop-in
-  [stack]
-  (let [entering (parse-symbol (last stack))
+  [stack linum]
+  (let [entering (with-endlinum (parse-symbol (last stack)) linum)
         stack (into [] (butlast stack))
         newstack (update-in stack [(- (count stack) 1)] #(conj % entering))]
     (if (= :quote (first (last newstack)))
-      (pop-in newstack)
+      (pop-in newstack linum)
       newstack)))
 
 (defn parse-sexpr
@@ -38,18 +43,18 @@
        (vector? (last stack))
          (cond
           (= \( c) (recur remainder linum (conj stack ^{:linum linum} []))
-          (= \) c) (recur remainder linum (pop-in stack))
+          (= \) c) (recur remainder linum (pop-in stack linum))
           (= \" c) (recur remainder linum (conj stack ""))
           (= \' c) (recur remainder linum (conj stack ^{:linum linum} [:quote]))
           (contains? whitespace c) (recur remainder linum stack)
           :else (recur remainder linum (conj stack (with-meta (symbol (str c)) {:linum linum}))))
        (string? (last stack))
          (cond
-          (= \" c) (recur remainder linum (pop-in stack))
+          (= \" c) (recur remainder linum (pop-in stack linum))
           :else (recur remainder linum (update-in stack [(- (count stack) 1)] #(str % c))))
        (symbol? (last stack))
          (cond
-          (contains? atom-end c) (recur sexp raw-linum (pop-in stack))
+          (contains? atom-end c) (recur sexp raw-linum (pop-in stack linum))
           :else (recur remainder linum (update-in stack [(- (count stack) 1)]
                                                   #(with-meta (symbol (str (name %) c))
                                                      {:linum linum}))))))))
