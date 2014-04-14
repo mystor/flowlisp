@@ -9,7 +9,7 @@
                  :dest {}}
                 {:target :result
                  :dest {}})
-   :objects {:global {'x 10}}})
+   :objects {:global {}}})
 
 (defn run
   [state]
@@ -22,15 +22,39 @@
   (run (initial-state src)))
 
 ;; WOO TESTING ;;
-(fleval
- '(begin
-   (define x 10)
-   (+ x 1)))
+(.log js/console "TESTING123")
+(try
+  (.log js/console (fleval '(+ 1 1)))
+  (catch flowlisp.core/Exception e
+    (.log js/console (:message e))))
+(.log js/console "TESTING123-DONE")
 
-(fleval
- '(let ((x 10)
-        (y 20))
-    (+ x y)))
+(.log js/console "TEST2")
+(try
+  (.log js/console (fleval '(begin (+ 1 1))))
+  (catch flowlisp.core/Exception e
+    (.log js/console (:message e))))
+(.log js/console "TEST2-DONE")
+
+(.log js/console "TEST3")
+(try
+  (.log js/console (fleval
+   '(begin
+     (define x 10)
+     (+ x 1))))
+  (catch flowlisp.core/Exception e
+    (.log js/console (:message e))))
+(.log js/console "TEST3-DONE")
+
+(.log js/console "TEST4")
+(try
+  (fleval
+   '(let ((x 10)
+          (y 20))
+      (+ x y)))
+  (catch flowlisp.core/Exception e
+    (.log js/console (:message e))))
+(.log js/console "TEST4-DONE")
 
 (fleval
  '(begin

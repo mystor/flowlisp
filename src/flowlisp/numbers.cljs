@@ -1,63 +1,52 @@
 (ns flowlisp.numbers
-  [:require [flowlisp.core :refer [register-keyword pure-fn]]])
+  [:require [flowlisp.core :refer [definefunction Exception]]])
 
 (defn isNaN? [x]
   (and (number? x) (not= x x)))
 
-(defn numerical-fn
-  [cb]
-  (pure-fn (fn [& args]
-             (if (every? number? args)
-               (let [value (apply cb args)]
-                 (if (isNaN? value)
-                   (throw (flowlisp.core/Exception. "Result is not a number"))
-                   value))
-               (throw (flowlisp.core/Exception. "Expected number, found non-number"))))))
+(defn definenumerical
+  "like definefunction, except all arguments are numbers,
+  and the return value throws an error if it is NaN"
+  [id cb]
+  (definefunction id (fn [& args]
+                       (if (every? number? args)
+                         (let [value (apply cb args)]
+                           (if (isNaN? value)
+                             (throw (Exception. "Result is not a number"))
+                             value))
+                         (throw (Exception. "Expected number, found non-number"))))))
 
-;; Basic math
-(register-keyword '+ (pure-fn +))
-(register-keyword '- (pure-fn -))
-(register-keyword '* (pure-fn *))
-(register-keyword '/ (pure-fn /))
+;; Basic arithmetic
+(definenumerical '+ +)
+(definenumerical '- -)
+(definenumerical '* *)
+(definenumerical '/ /)
 
-;; division stuff
-(register-keyword 'quotient (pure-fn quot))
-(register-keyword 'remainder (pure-fn rem))
-(register-keyword 'modulo (pure-fn mod))
+(definenumerical 'quotient quot)
+(definenumerical 'remainder rem)
+(definenumerical 'modulo mod)
 
-(defn abs [x]
-  (cond
-   (not (number? x)) (throw (flowlisp.core/Exception. "abs can only be called on a number"))
-   (neg? x) (- x)
-   :else x))
-(register-keyword 'abs (pure-fn abs))
+(definenumerical 'abs (fn [x]
+                        (if (neg? x) (- x) x)))
 
+(definenumerical 'min min)
+(definenumerical 'max max)
 
-;; Minimum & Maximum value
-(register-keyword 'min (pure-fn min))
-(register-keyword 'max (pure-fn max))
+(definenumerical 'sqrt #(.sqrt js/Math %))
+(definenumerical 'expt #(.pow js/Math %1 %2))
+(definenumerical 'exp #(.pow js/Math (.-E js/Math) %))
+(definenumerical 'log #(.log js/Math %))
+(definenumerical 'floor #(.floor js/Math %))
 
-;; Important functions
-;! XXX: Clojurescript specific, consider more language agnostic
-(register-keyword 'sqrt (pure-fn #(.sqrt js/Math %)))
-
-(register-keyword 'expt (pure-fn #(.pow js/Math %1 %2)))
-(register-keyword 'exp (pure-fn #(.pow js/Math (.-E js/Math) %)))
-(register-keyword 'log (pure-fn #(.log js/Math %)))
-
-(defn gcd [a b]
-  (cond
-   (not (and (number? a) (number? b))) (throw (flowlisp.core/Exception. "gcd must be called on a number"))
-   (zero? b) a
-   :else (recur b (rem a b))))
-(register-keyword 'gcd (pure-fn gcd))
-
-(register-keyword 'floor (pure-fn #(.floor js/Math %)))
+(definenumerical 'gcd (fn gcd [a b]
+                        (if (zero? b)
+                          a
+                          (recur b (rem a b)))))
 
 
 ;; Comparisons
-(register-keyword '> (pure-fn >))
-(register-keyword '< (pure-fn <))
-(register-keyword '= (pure-fn =))
-(register-keyword '<= (pure-fn <=))
-(register-keyword '>= (pure-fn >=))
+(definenumerical '> >)
+(definenumerical '< <)
+(definenumerical '= =)
+(definenumerical '<= <=)
+(definenumerical '>= >=)

@@ -1,6 +1,8 @@
 (ns flowlisp.core)
 
 (defrecord Exception [message])
+(defrecord IncompleteException [state])
+(def keywords (atom {}))
 
 ;;;;;;;;;;;;;;;;;;;;;;;
 ;; UTILITY FUNCTIONS ;;
@@ -28,24 +30,10 @@
   [lst cb]
   (cons (cb (first lst)) (rest lst)))
 
-(defn stack-entry
-  "Retrieves the current stack entry"
-  [state]
-  (first (:stack state)))
-
 (defn update-stack-entry
   "Calls cb, passing the current stack entry. Return values replaces the current stack entry"
   [state cb]
   (update-in state [:stack] #(update-first % cb)))
-
-(defn mk-stack-entry
-  "Creates a new stack entry and adds it to the stack"
-  [state source context]
-  (update-in state [:stack]
-             #(cons {:source source
-                     :context context
-                     :dest {}
-                     :target nil} %)))
 
 ;; This is an object to represent the non-existance of a value.
 ;; All instances of NoValue are equal, and will match with = (not identical?)
@@ -57,173 +45,185 @@
   (instance? NoValue x))
 
 ;; This is the parent type for a user function
-(defrecord UserFn [id args source context])
-(defn user-fn
-  [id args source context]
-  (UserFn. id args source context))
-(defn user-fn?
-  [x]
-  (instance? UserFn x))
-
-(defn constant?
-  [x]
-  (or (number? x) (string? x) (true? x) (false? x) (nil? x)))
-
-(defn instant?
-  [x]
-  (or (constant? x) (symbol? x) (keyword? x)))
-
 
 ;;;;;;;;;;;;;;;;;;;;;
 ;; CORE EVALUATION ;;
 ;;;;;;;;;;;;;;;;;;;;;
 
-(defn fl-return
-  "Returns the value (:value ctx) to the previous entry on the stack
-  Pops the current stack entry off of the stack."
-  [state ctx]
-  (update-in state [:stack] (fn [stack]
-                              (let [stack (rest stack)
-                                    entry (first stack)]
-                                (cons (update-in entry [:dest]
-                                                 #(assoc % (:target entry) (:value ctx)))
-                                      (rest stack))))))
-
-(defn chain
-  "Chains together the middleware stack.
-  The top of the stack will be a fl-return"
-  [& middleware-list]
-  (if (empty? middleware-list)
-    fl-return ; The default action is to return
-    (let [middleware (first middleware-list)
-          next (apply chain (rest middleware-list))]
-      (fn [state ctx]
-        (middleware state ctx next)))))
-
-(def keywords (atom {}))
-(defn fl-resolve
-  [state arg context]
-  (if (constant? arg)
-    arg
-    (if (keyword? arg)
-      (recur state (symbol (name arg)) nil)
-      (if (nil? context)
-        (let [value (get @keywords arg novalue)]
-          (if (novalue? value)
-            (throw (Exception. (str "Could not resolve " (name arg))))
-            value))
-        (let [resolved-context (get (:objects state) context)
-              parent (:parent resolved-context)
-              value (get resolved-context arg novalue)]
-          (if (novalue? value)
-            (recur state arg parent)
-            value))))))
-
-(defn register-keyword
-  [kwd value]
-  (swap! keywords #(assoc % kwd value)))
-
-(defn eval-to
-  "Middleware - evaluates the form :src and calls next when it is ready
-  Places the resulting item at :target"
-  [state ctx source target next]
-  (let [entry (stack-entry state)
-        context (:context entry)
-        value (get (:dest entry) target novalue)]
-    (if (novalue? value)
-      (if (instant? source)
-        (recur (update-stack-entry state  ; We can resolve it instantly
-                                   #(assoc-in % [:dest target]
-                                              (fl-resolve state source context)))
-               ctx source target next)
-        (-> state  ; We have to perform a call - add it to the stack
-            (update-stack-entry #(assoc % :target target))
-            (mk-stack-entry source context)))
-      (next state  ; We have resolved this already - call next
-            (assoc ctx :value value)))))
-
-(defn eval-arg
-  [state ctx next]
-  (let [idx (:src-idx ctx)]
-    (eval-to state (assoc ctx :src-idx (inc idx)) (nth (:source (stack-entry state)) idx) idx next)))
-
-(defn basic-fn
-  "Generates a middleware stack which will evaluate all arguments, and then
-  call cb when the arguments have all been evaluated.
-
-  cb will be called with the following arguments: [state ctx next args]"
-  [cb]
-  (fn [state ctx]
-    (let [entry (stack-entry state)
-          args (rest (:source entry))
-          arity (count args)]
-      ((apply chain
-             (concat
-              (repeat arity eval-arg)
-              [(fn [state ctx next]
-                 (let [entry (stack-entry state)
-                       dest (:dest entry)
-                       args (map #(get dest %) (range 1 (+ arity 1)))]
-                   (cb state ctx next args)))])) state ctx))))
-
-(defn pure-fn
-  "A pure function evaluates all of its arguments.
-  It does not modify state, and only depends on its arguments.
-  It is called with the arguments as its arguments"
-  [cb]
-  (with-meta (basic-fn (fn [state ctx next args]
-                         (next state (assoc ctx :value (apply cb args)))))
-    {:procedure true}))
-
-(defn basic-macro
-  [cb]
-  (fn [state ctx]
-    (let [entry (stack-entry state)
-          args (rest (:source entry))]
-      (cb state ctx next args))))
-
-(defn pure-macro
-  [cb]
-  (basic-macro (fn [state ctx next args]
-                 (mk-stack-entry (update-in state [:stack] rest)
-                                 (apply cb args)
-                                 (:context (stack-entry state))))))
-
-(defn gen-context
-  [action args]
-  (-> (zipmap (:args action) (concat args (repeat nil)))
-      (assoc :parent (:context action))))
-
-(defn call-user-fn
-  "Call a user defined function (will be executed on the stack)"
-  [state ctx]
-  (let [action (:value ctx)
-        source (cons :begin (:source action))
-        src-key (random-str 10)
-        handler (fn [state ctx next args]
-                  (-> state
-                      (update-in [:stack] rest)
-                      (update-in [:objects] #(assoc % src-key (gen-context action args)))
-                      (mk-stack-entry source src-key)))]
-    ((basic-fn handler) state ctx)))
-
-(defn do-action
-  "Performs the correct action for the given action (action is (:value ctx))"
-  [state ctx next]
-  (let [action (:value ctx)]
-    (cond
-     (fn? action) (action state ctx)
-     (user-fn? action) (call-user-fn state ctx)
-     :else (throw (Exception. (str "Cannot call non-callable (first element in form must be callable)" action))))))
-
-;; On a tick, we evaluate the action, and then perform it
-(def do-tick (chain eval-arg do-action))
-(defn tick
-  "Run one iteration of the program"
+(defn raw-args
+  "Returns the unevaluated arguments for the current stack entry"
   [state]
-  (do-tick state {:src-idx 0}))
+  (-> state (:stack) (first) (:source) (rest)))
 
-;; Define the keywords
-;; These are added to the keywords atom
-;; TODO: Move these to a seperate module? (at least the definitions)
+(defn- cached-args
+  "Returns the cached evaluated arguments for the current stack entry"
+  [state]
+  (-> state (:stack) (first) (:dest)))
 
+;; These functions are for modifying the state object such that something
+;; other than the current stack entry is being modified.
+;; They do not directly throw IncompleteException.
+
+(defn return
+  "Returns a new state, with the top item removed, and value inserted into the next entry"
+  [state value]
+  (update-in state [:stack]
+             (fn [stack]
+               (-> stack
+                   (rest)
+                   (update-first (fn [entry]
+                                   (assoc-in entry [:dest (:target entry)] value)))))))
+
+(defn call
+  "Returns a new state, with src added to the top of the stack"
+  [state src context]
+  (update-in state [:stack]
+             (fn [stack]
+               (cons {:source src
+                      :target nil
+                      :dest {}
+                      :context context} stack))))
+
+(defn swap
+  "Returns a new state, with src replacing the top of the stack"
+  [state src context]
+  (call (update-in state [:stack] rest) src context))
+
+;; evaluate internals ;;
+
+(defn- evaluated-value
+  "The cached value of the item with the id"
+  [state id & [default]]
+  (get (cached-args state) id default))
+
+(defn- evaluated?
+  "Is there a cached value with this id in the current state?"
+  [state id]
+  (not (novalue? (evaluated-value state id novalue))))
+
+(defn- followable?
+  "Can the item be followed, or must it be evaluated first?"
+  [src]
+  (not (list? src)))
+
+(defn context-id
+  "Get the identifier for the current context"
+  [state]
+  (-> state (:stack) (first) (:context)))
+
+(defn context
+  "Get the current context"
+  [state]
+  (get (:objects state) (context-id state)))
+
+(defn- context-lookup
+  "Lookup a symbol in the passed in context"
+  [src context]
+  (get context src novalue))
+
+(defn- keyword-lookup
+  "Lookup a keyword in the keywords map"
+  [src]
+  (get @keywords (name src) novalue))
+
+(defn- follow-symbol
+  "Follow a followable symbol"
+  [state src context]
+  (if (nil? context)
+    (let [value (keyword-lookup src)]
+      (if (novalue? value)
+        (throw (Exception. (str "Cannot resolve symbol: " (name src))))
+        value))
+    (let [value (context-lookup src context)]
+      (if (novalue? value)
+        (recur state src (get (:objects state) (:parent context)))
+        value))))
+
+(defn- follow
+  "Follow a followable symbol, keyword or constant"
+  [state src]
+  (cond
+   (symbol? src) (follow-symbol state src (context state))
+   (keyword? src) (let [value (keyword-lookup src)]
+                    (if (novalue? value)
+                      (throw (Exception. (str "Cannot resolve keyword: " (name src))))
+                      value))
+   :else src))
+
+(defn- cache-value
+  "Cache the value under the id in the current stack entry"
+  [state id value]
+  (update-stack-entry state
+                      (fn [entry]
+                        (assoc-in entry [:dest id] value))))
+
+(defn- set-target
+  "Set the target value of the current stack entry"
+  [state id]
+  (update-stack-entry state #(assoc % :target id)))
+
+(defn evaluate
+  "Evaluate src in the context of the current state - cache the value with the id id"
+  [state src id]
+  (cond
+   (evaluated? state id) (evaluated-value state id)
+   (followable? src) (throw (IncompleteException. (cache-value state id (follow state src))))
+   :else (throw (IncompleteException. (call (set-target state id) src (context-id state))))))
+
+;; definesyntax and definefunction are used to define internal functions & syntax.
+;; Both will create an entry in the keywords map.
+(defn setsymbol [id value]
+  (swap! keywords #(assoc % (name id) value)))
+
+(defn definesyntax
+  "Define an action which returns a value, cb accepts [state & raw-args]"
+  [id cb]
+  (setsymbol id (fn [state]
+                  (return state (apply cb (cons state (raw-args state)))))))
+
+(defn definetransform
+  "Define an action which returns a new form, cb accepts [& raw-args]"
+  [id cb]
+  (setsymbol id (fn [state]
+                  (swap state (apply cb (raw-args state)) (context state)))))
+
+(defn definefunction
+  "Define a function, the cb accepts [& args]"
+  [id cb]
+  (definesyntax id (fn [state & raw-args]
+                     (apply cb (map #(evaluate state (second %) (first %)) (zipmap (range) raw-args))))))
+
+;; The base type for user define functions. Generally not used directly, but
+;; instead used by the handler code for the (lambda) special form.
+;; Implements IFn such that it can be called in the same way as internal functions.
+(defrecord UserFn [id args src context]
+  IFn
+  (invoke [_ state]
+    (let [src (cons :begin src)
+          context-id (random-str 10)
+          argv (map #(evaluate state (second %) (first %)) (zipmap (range) (raw-args state)))
+          fn-context (zipmap args (concat argv (repeat '())))
+          fn-context (assoc fn-context :parent context)
+          state (swap state src context-id)
+          state (assoc-in state [:objects context-id] fn-context)]
+      (throw (IncompleteException. state)))))
+
+(defn userfn?
+  "Is the object x a UserFn?"
+  [x]
+  (instance? UserFn x))
+
+(defn tick
+  "Run a single tick of stack updates"
+  [state]
+  (try
+    (let [entry (-> state (:stack) (first))
+          action (evaluate state (first (:source entry)) :action)]
+      (action state))
+
+    ;; IncompleteException is thrown when additional calls to tick are required before
+    ;; the action is able to complete.  It is thrown very frequently.
+    ;; TODO: Investigate the performance implications of using exceptions, and consider
+    ;; replacing exception use with something equally readable but not as slow
+    (catch IncompleteException e
+      (:state e))))
