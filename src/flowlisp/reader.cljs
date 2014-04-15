@@ -23,8 +23,10 @@
 
 (def space " \t\n")
 (defparser spaces []
-  (p/many1
-   (one-of space)))
+  (p/many1 (one-of space)))
+
+(defparser optional-spaces []
+  (p/many (one-of space)))
 
 ;; Strings
 (defparser parse-string []
@@ -76,8 +78,10 @@
 (defparser parse-any-list []
   (p/let->> [start-pos (p/extract #(:pos %))
              _ (p/char \()
+             _ (optional-spaces)
              lst (p/either (p/attempt (parse-dotted-list)) (parse-list))
              end-pos (p/extract #(:pos %))
+             _ (optional-spaces)
              _ (p/char \))]
     (p/always (with-meta lst {:start start-pos :end end-pos}))))
 
