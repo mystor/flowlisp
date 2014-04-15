@@ -1,72 +1,128 @@
-(ns flowlisp.reader)
+(ns flowlisp.reader
+  (:require [the.parsatron :as p :include-macros true :refer [defparser]]
+            [flowlisp.pairutils :as pairutils :refer [DottedList]]))
 
-;; XXX: This will probably break in cljs - consider writing language agnostic ;;
-(defn string->number
-  "Parses"
-  [s]
-  (js/parseFloat s))
+;; Parsatron doesn't have every helper you could want, these are some useful ones
+(defparser one-of [string]
+  (p/token (fn [c] (some #(= c %) string))))
 
-(def atom-end #{\( \) \" \' \space \tab \newline})
-(def whitespace #{\space \tab \newline})
-(def digits #{\0 \1 \2 \3 \4 \5 \6 \7 \8 \9})
+(defparser seperated-by [item sep]
+  (p/let->> [fst (item)
+             rst (p/many (p/attempt (p/nxt (sep) (item))))]
+    (p/always (cons fst rst))))
 
-(defn parse-symbol
-  [s]
-  (if (symbol? s)
-    (cond
-     (contains? digits (first (name s))) (string->number (name s))
-     (and (= \- (first (name s))) (contains? digits (second (name s)))) (string->number (name s))
-     (= \# (first (name s))) (= \t (second (name s)))
-     :else s)
-    s))
+(defparser ended-by [item sep]
+  (p/many1
+   (p/let->> [i (item)
+              _ (sep)]
+     (p/always i))))
 
-(defn with-endlinum [form linum]
-  (if (vector? form)
-    (with-meta form (assoc (meta form) :endlinum linum))
-    form))
+;; Basic tokens
+(defparser parse-symbol []
+  (one-of "!#$%&|*+-/:<=>?@^_~"))
 
-(defn pop-in
-  [stack linum]
-  (let [entering (with-endlinum (parse-symbol (last stack)) linum)
-        stack (into [] (butlast stack))
-        newstack (update-in stack [(- (count stack) 1)] #(conj % entering))]
-    (if (= :quote (first (last newstack)))
-      (pop-in newstack linum)
-      newstack)))
+(def space " \t\n")
+(defparser spaces []
+  (p/many1
+   (one-of space)))
 
-(defn parse-sexpr
-  [[c & remainder :as sexp] raw-linum stack]
-  (let [linum (if (= \newline c) (inc raw-linum) raw-linum)]
-    (if (empty? sexp)
-      (first stack)
-      (cond
-       (vector? (last stack))
-         (cond
-          (= \( c) (recur remainder linum (conj stack ^{:linum linum} []))
-          (= \) c) (recur remainder linum (pop-in stack linum))
-          (= \" c) (recur remainder linum (conj stack ""))
-          (= \' c) (recur remainder linum (conj stack ^{:linum linum} [:quote]))
-          (contains? whitespace c) (recur remainder linum stack)
-          :else (recur remainder linum (conj stack (with-meta (symbol (str c)) {:linum linum}))))
-       (string? (last stack))
-         (cond
-          (= \" c) (recur remainder linum (pop-in stack linum))
-          :else (recur remainder linum (update-in stack [(- (count stack) 1)] #(str % c))))
-       (symbol? (last stack))
-         (cond
-          (contains? atom-end c) (recur sexp raw-linum (pop-in stack linum))
-          :else (recur remainder linum (update-in stack [(- (count stack) 1)]
-                                                  #(with-meta (symbol (str (name %) c))
-                                                     {:linum linum}))))))))
+;; Strings
+(defparser parse-string []
+  (p/char \")
+  (p/let->> [string (p/many
+                     (p/either (p/attempt (p/nxt (p/char \\) (p/char \"))) ; escaped "
+                               (p/token #(not (= % \")))))]    ; anything else
+    (p/char \")
+    (p/always (apply str string))))
 
-(defn deep-into-seq
-  [v]
-  (with-meta (seq (map #(if (vector? %) (deep-into-seq %) %) v)) (meta v)))
+;; Atoms
+(defparser parse-atom []
+  (p/let->> [first (p/either (p/letter) (parse-symbol))
+             rest (p/many (p/choice (p/letter) (parse-symbol) (p/digit)))]
+    (p/always (let [s (apply str first rest)]
+                (case s
+                  "#t" true
+                  "#f" false
+                  (symbol s))))))
 
-(defn lex-parse
-  [source]
-  (deep-into-seq (cons :begin (parse-sexpr source 1 [[]]))))
+;; Numbers
+(defparser positive-number []
+  (p/let->> [fst (p/digit)
+             cs (p/many (p/either (p/digit) (p/char \.)))]
+    (p/always (let [s (apply str fst cs)]
+                (js/parseFloat s 10)))))
 
+(defparser negative-number []
+  (p/char \-)
+  (p/let->> [n (positive-number)]
+    (p/always (- n))))
 
+(defparser parse-number []
+  (p/either (negative-number) (positive-number)))
 
-(lex-parse "(set!\n'(x y z) 10)\n\n(set! x 5) (#t #f 10)")
+;; Lists
+(declare parse-expr)
+
+(defparser parse-list []
+  (seperated-by parse-expr spaces))
+
+(defparser parse-dotted-list []
+  (p/let->> [head (ended-by parse-expr spaces)
+             _ (p/char \.)
+             _ (spaces)
+             tail (parse-expr)]
+    (p/always (DottedList. head tail))))
+
+(defparser parse-any-list []
+  (p/let->> [start-pos (p/extract #(:pos %))
+             _ (p/char \()
+             lst (p/either (p/attempt (parse-dotted-list)) (parse-list))
+             end-pos (p/extract #(:pos %))
+             _ (p/char \))]
+    (p/always (with-meta lst {:start start-pos :end end-pos}))))
+
+;; Prefixes
+(defparser parse-prefixed [c action]
+  (p/let->> [start-pos (p/extract #(:pos %))
+             _ (p/char c)
+             expr (parse-expr)]
+    (p/always (with-meta (list action expr)
+                {:start start-pos
+                 :end (:end (meta expr))}))))
+
+;; General Parser
+(defparser parse-expr []
+  (p/choice
+   (parse-atom)
+   (parse-string)
+   (parse-number)
+   (parse-prefixed \' 'quote)
+   (parse-prefixed \` 'quasiquote)
+   (parse-prefixed \, 'unquote)
+   (parse-any-list)))
+
+(defparser parse-program []
+  (p/either (p/attempt (spaces)) (p/always nil))
+  (p/let->> [prog (p/many (p/let->> [l (parse-expr)
+                                     _ (spaces)]
+                            (p/always l)))]
+    (p/eof)
+    (p/always prog)))
+
+(defn lex-parse [string]
+  (cons :begin (p/run (parse-program) (str string " "))))
+
+(lex-parse "(asd f)")
+
+(p/run (parse-expr) "(asd . f)")
+(p/run (parse-expr) "`(asd f (+ ,x 1 10))")
+(p/run (parse-expr) "'(asd f (+ x 1))")
+(meta (p/run (parse-expr) "'(asd f (+ x 1))"))
+
+(p/run (parse-list) "asd f ghjas")
+
+(p/run (parse-atom) "mea99n$$ie")
+
+(p/run (parse-number) "1")
+
+(p/run (parse-string) "\"Happy Days \\Here! \\\" asd\"")

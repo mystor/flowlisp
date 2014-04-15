@@ -1,5 +1,7 @@
 (ns flowlisp.lang
-  [:require [flowlisp.core :refer [tick]]])
+  (:require [flowlisp.core :refer [tick]]
+            [flowlisp.special]
+            [flowlisp.numbers]))
 
 ;; Basic testing functions ;;
 (defn initial-state
@@ -56,15 +58,21 @@
     (.log js/console (:message e))))
 (.log js/console "TEST4-DONE")
 
-(fleval
+(try
+ (fleval
  '(begin
    (define function (lambda (x)
                             (set! x 10)))
    (define x 20)
    (function)
    x))
+  (catch flowlisp.core/Exception e
+    (.error js/console (:message e))))
+
+(.log js/console "TEST5-DONE")
 
 (fleval
  '(or false false))
+(.log js/console "TEST6-DONE")
 
 (fleval '(sqrt 4))

@@ -76,6 +76,10 @@
   [e]
   (swap! app-state assoc :scroll-y e))
 
+(defn on-cursor-move
+  [e]
+  (.log js/console (.getCursor (.-selection @editor))))
+
 (defn code-view
   [data owner]
   (reify
@@ -91,7 +95,8 @@
       (.setOption @editor "scrollPastEnd" true)
       ;; Attach some event listeners
       (.on @editor "change" #(on-change %))
-      (.on (.-session @editor) "changeScrollTop" #(on-scroll %)))
+      (.on (.-session @editor) "changeScrollTop" #(on-scroll %))
+      (.on (.-selection (.getSession @editor)) "changeCursor" #(on-cursor-move %)))
     om/IRender
     (render [this]
       (dom/div #js {:id "code"}
